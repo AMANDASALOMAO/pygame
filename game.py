@@ -12,10 +12,10 @@ MAX_PLATFORMS = 20
 game_state = "menu"
 
 hero_images = [f'hit{i}' for i in range(1, 8)]
-hero_idle_images = ['jump']
+hero_idle_images = [f'iddle{i}' for i in range(1, 11)]
 double_jump_images = [f'doublejump{i}' for i in range(1, 6)]
 coin_images = [f'coins{i}' for i in range(1, 4)]
-bomb_image = [f'bomb{i}' for i in range(1, 2)]
+bomb_image = [f'bomb{i}' for i in range(1, 4)]
 
 bg = Actor('bg_03', center=(WIDTH // 2, HEIGHT // 2))
 platform_image = 'cloud'
@@ -53,6 +53,13 @@ class Player:
         self.hit_frames = [Actor(name) for name in hero_images]
         self.double_jump_frames = [Actor(name) for name in double_jump_images]
 
+        if not self.idle_frames:
+            raise ValueError("idle_frames está vazio! Verifique se as imagens existem.")
+        if not self.hit_frames:
+            raise ValueError("hit_frames está vazio! Verifique se as imagens existem.")
+        if not self.double_jump_frames:
+            raise ValueError("double_jump_frames está vazio! Verifique se as imagens existem.")
+
         self.anim_index = 0
         self.anim_speed = 0.2
         self.image = self.idle_frames[0]
@@ -60,6 +67,8 @@ class Player:
         self.is_hit = False
         self.can_jump = True
         self.jump_lock = False
+        self.has_double_jump = True
+        self.double_jumping = False
 
     def move(self):
         global scroll
@@ -67,8 +76,8 @@ class Player:
         if self.is_hit:
             return
 
-        moved = False 
-        
+        moved = False
+
         if keyboard.a or keyboard.left:
             dx = -10
             self.flip = True
@@ -83,11 +92,17 @@ class Player:
 
         jump_pressed = keyboard.space or keyboard.w or keyboard.up
 
-        if jump_pressed and not self.jump_lock and self.can_jump:
-            self.vel_y = -20
-            jump_fx.play()
-
-            self.can_jump = True
+        if jump_pressed and not self.jump_lock:
+            if self.can_jump:
+                self.vel_y = -20
+                jump_fx.play()
+                self.can_jump = False
+                self.double_jumping = False
+            elif self.has_double_jump:
+                self.vel_y = -20
+                jump_fx.play()
+                self.has_double_jump = False
+                self.double_jumping = True
             self.jump_lock = True
 
         if not jump_pressed:
@@ -109,7 +124,10 @@ class Player:
                     self.rect.bottom = p.rect.top
                     dy = 0
                     self.vel_y = 0
-                    
+                    self.can_jump = True
+                    self.has_double_jump = True
+                    self.double_jumping = False
+
                     if p.moving:
                         self.rect.x += p.direction * p.speed
 
@@ -120,11 +138,22 @@ class Player:
 
         self.rect.x += dx
         self.rect.y += dy + scroll
-
         self.anim_index += self.anim_speed
-        if self.anim_index >= len(self.idle_frames):
+        max_frames = max(len(self.idle_frames), len(self.double_jump_frames))
+
+        if self.anim_index >= max_frames:
             self.anim_index = 0
-        self.image = self.idle_frames[int(self.anim_index)]
+
+        if self.double_jumping:
+            if self.double_jump_frames:
+                frame_idx = int(self.anim_index) % len(self.double_jump_frames)
+                self.image = self.double_jump_frames[frame_idx]
+            else:
+                frame_idx = int(self.anim_index) % len(self.idle_frames)
+                self.image = self.idle_frames[frame_idx]
+        else:
+            frame_idx = int(self.anim_index) % len(self.idle_frames)
+            self.image = self.idle_frames[frame_idx]
 
     def update_hit_animation(self, dt):
         self.anim_index += self.anim_speed
@@ -136,6 +165,7 @@ class Player:
         self.image.angle = 0
         self.image.pos = self.rect.center
         self.image.draw()
+
 
 class Platform:
     def __init__(self, x, y, width, moving):
@@ -201,13 +231,28 @@ class Bomb:
         w, h = self.image.width, self.image.height
         self.rect = Rect(x - w // 2, y - h // 2, w, h)
 
+        self.direction = random.choice([-1, 1])
+        self.speed = random.randint(2, 4)
+        self.move_counter = 0
+
     def update(self):
         self.anim_index += self.anim_speed
         if self.anim_index >= len(self.anim_frames):
             self.anim_index = 0
-        self.image = self.anim_frames[int(self.anim_index)]
+        frame_index = int(self.anim_index)
+        self.image.image = self.anim_frames[frame_index].image
+
+        self.move_counter += 1
+        self.rect.x += self.direction * self.speed
+        self.image.x += self.direction * self.speed
+
+        if self.rect.left < 0 or self.rect.right > WIDTH:
+            self.direction *= -1
+            self.move_counter = 0
+
         self.rect.y += scroll
         self.image.y += scroll
+
 
     def draw(self):
         self.image.draw()
@@ -218,7 +263,6 @@ class Bomb:
     def collide(self, player_rect):
         return self.rect.colliderect(player_rect)
 
-player = Player(WIDTH // 2, HEIGHT - 150)
 platforms = [Platform(0, HEIGHT - 40, WIDTH, False)]
 coins = []
 bombs = []
@@ -234,6 +278,9 @@ for i in range(1, 6):
         coins.append(Coin(p.rect.centerx, p.rect.y - 30))
     if random.random() < 0.1:
         bombs.append(Bomb(p.rect.centerx, p.rect.y - 20))
+
+lowest_platform = max(platforms, key=lambda p: p.rect.top)
+player = Player(lowest_platform.rect.centerx, lowest_platform.rect.top - 25)
 
 start_button = Rect(WIDTH // 2 - 100, 300, 200, 50)
 sound_button = Rect(WIDTH // 2 - 100, 370, 200, 50)
@@ -328,7 +375,7 @@ def draw():
         screen.draw.text(f"Recorde: {high_score}", (20, 60), fontsize=30, color="orange")
         if game_over:
             screen.draw.text("GAME OVER", center=(WIDTH // 2, HEIGHT // 2), fontsize=60, color="red")
-            screen.draw.text("Pressione Espaço para reiniciar", center=(WIDTH // 2, HEIGHT // 2 + 50), fontsize=30,
+            screen.draw.text("Pressione Espaco para reiniciar", center=(WIDTH // 2, HEIGHT // 2 + 50), fontsize=30,
                              color="white")
 
 def on_mouse_down(pos):
@@ -353,7 +400,6 @@ def reset_game():
     game_over = False
     scroll = 0
     hit_animation_time = 0
-    player = Player(WIDTH // 2, HEIGHT - 150)
 
     platforms.clear()
     platforms.append(Platform(0, HEIGHT - 40, WIDTH, False))
@@ -371,3 +417,10 @@ def reset_game():
             coins.append(Coin(p.rect.centerx, p.rect.y - 30))
         if random.random() < 0.3:
             bombs.append(Bomb(p.rect.centerx, p.rect.y - 20))
+
+    lowest_platform = max(platforms, key=lambda p: p.rect.top)
+    player = Player(lowest_platform.rect.centerx, lowest_platform.rect.top - 25)
+
+    player.can_jump = True
+    player.has_double_jump = True
+    player.double_jumping = False
